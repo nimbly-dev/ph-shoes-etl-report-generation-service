@@ -16,9 +16,3 @@ spring:
 
   jpa:
     show-sql: true
-
-ai:
-  openai:
-    speech:
-      enabled: false
-    api-key: ${SPRING_AI_OPENAI_API_KEY}
