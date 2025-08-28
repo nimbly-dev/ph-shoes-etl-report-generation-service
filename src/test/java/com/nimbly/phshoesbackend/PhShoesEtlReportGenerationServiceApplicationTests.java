@@ -1,4 +1,4 @@
-package com.nimbly.phshoesbackend.ph_shoes_etl_report_generation_service;
+package com.nimbly.phshoesbackend;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;

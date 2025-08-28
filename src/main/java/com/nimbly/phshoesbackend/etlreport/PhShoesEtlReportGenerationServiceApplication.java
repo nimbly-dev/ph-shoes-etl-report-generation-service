@@ -1,4 +1,4 @@
-package com.nimbly.phshoesbackend.ph_shoes_etl_report_generation_service;
+package com.nimbly.phshoesbackend.etlreport;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
