@@ -1,10 +1,11 @@
+# src/main/resources/application-prod.yml
 spring:
   application:
     name: ph-shoes-etl
 
   datasource:
     driver-class-name: net.snowflake.client.jdbc.SnowflakeDriver
-    # Keep URL on ONE line
+    # Keep URL in one line. Let schema/warehouse default if not provided.
     url: "jdbc:snowflake://${SNOWFLAKE_ACCOUNT}.snowflakecomputing.com/?warehouse=${SNOWFLAKE_WAREHOUSE:COMPUTE_WH}&db=${SNOWFLAKE_DATABASE}&schema=${SNOWFLAKE_SCHEMA:PUBLIC}&role=${SNOWFLAKE_ROLE}"
     username: ${SNOWFLAKE_USER}
     password: ${SNOWFLAKE_PASSWORD}
@@ -14,7 +15,6 @@ spring:
       idle-timeout: 30000
       connection-timeout: 30000
       data-source-properties:
-        # keep Arrow off to avoid native deps
         ENABLE_ARROW_RESULTSET: false
         CLIENT_SESSION_KEEP_ALIVE: true
 
@@ -22,9 +22,7 @@ spring:
     open-in-view: false
     hibernate:
       ddl-auto: none
-    properties:
-      hibernate:
-        dialect: org.hibernate.dialect.SnowflakeDialect
+    properties: { }
 
 management:
   endpoints:
