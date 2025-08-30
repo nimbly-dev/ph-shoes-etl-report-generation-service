@@ -1,31 +1,35 @@
-name: Daily ETL Report (HTML + JSON)
+name: ETL Report → GitHub Pages
 
 on:
+  push:
+    branches: [ main ]         # update page on every push to main
   schedule:
-    - cron: '5 15 * * *'   # ~23:05 Asia/Manila; adjust
+    - cron: '5 15 * * *'       # ~23:05 Asia/Manila daily
   workflow_dispatch:
 
 concurrency:
-  group: daily-etl-report
+  group: etl-report-pages
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  id-token: write          # required by deploy-pages
+  pages: write             # required by deploy-pages
+
 jobs:
-  run-and-save:
-    environment: main                  # <-- your Environment name
+  build-and-generate:
+    environment: main      # <-- your Environment with Snowflake secrets/vars
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    permissions:
-      contents: read
 
     env:
-      # Secrets/vars from Environment: main
+      # Env from your Environment "main" (Settings → Environments → main)
       SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
       SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
       SNOWFLAKE_ACCOUNT: ${{ vars.SNOWFLAKE_ACCOUNT }}
       SNOWFLAKE_DATABASE: ${{ vars.SNOWFLAKE_DATABASE }}
-      SNOWFLAKE_SCHEMA: ${{ vars.SNOWFLAKE_SCHEMA }}           # optional; app default PUBLIC
-      SNOWFLAKE_WAREHOUSE: ${{ vars.SNOWFLAKE_WAREHOUSE }}     # optional; app default COMPUTE_WH
       SNOWFLAKE_ROLE: ${{ vars.SNOWFLAKE_ROLE }}
+      # optional; let app default to PUBLIC/COMPUTE_WH when not set
       TZ: Asia/Manila
       SPRING_PROFILES_ACTIVE: prod
 
@@ -36,79 +40,73 @@ jobs:
       - name: Build Docker image (DockerfileDeploy)
         run: docker build -t ph-shoes-etl:latest -f DockerfileDeploy .
 
-#      - name: Verify Snowflake driver packaged
-#        run: |
-#          CID=$(docker create ph-shoes-etl:latest)
-#          docker cp "$CID":/app/app.jar ./app.jar
-#          docker rm "$CID" >/dev/null
-#          jar tf app.jar | grep -q "net/snowflake/client/jdbc/SnowflakeDriver.class" || { echo "❌ JDBC driver missing"; exit 1; }
-
-      - name: Start container (keep for logs)
-        id: start
+      - name: Start app container
         run: |
-          CID=$(docker run -d --name ph-shoes-etl -p 8080:8080 \
+          docker run -d --name ph-shoes-etl -p 8080:8080 \
             -e SNOWFLAKE_USER \
             -e SNOWFLAKE_PASSWORD \
             -e SNOWFLAKE_ACCOUNT \
             -e SNOWFLAKE_DATABASE \
-            -e SNOWFLAKE_SCHEMA \
-            -e SNOWFLAKE_WAREHOUSE \
             -e SNOWFLAKE_ROLE \
             -e TZ \
             -e SPRING_PROFILES_ACTIVE \
-            ph-shoes-etl:latest)
-          echo "cid=$CID" >> $GITHUB_OUTPUT
-          docker ps -a
-
-      - name: First 200 log lines
-        run: docker logs --tail=200 ph-shoes-etl || true
+            ph-shoes-etl:latest
 
       - name: Wait for app
-        id: wait
         shell: bash
         run: |
-          set -e
           for i in {1..30}; do
+            if curl -fsS "http://localhost:8080/reports/etl?timezone=Asia/Manila" >/dev/null; then exit 0; fi
             if ! docker ps --format '{{.Names}}' | grep -q '^ph-shoes-etl$'; then
-              echo "Container exited early"; echo "ready=false" >> $GITHUB_OUTPUT; exit 1
+              echo "Container exited early"; docker logs ph-shoes-etl || true; exit 1
             fi
-            if curl -fsS "http://localhost:8080/reports/etl?timezone=Asia/Manila" >/dev/null; then
-              echo "ready=true" >> $GITHUB_OUTPUT; exit 0
-            fi
-            echo "Waiting... ($i/30)"; sleep 3
+            sleep 3
           done
-          echo "ready=false" >> $GITHUB_OUTPUT; exit 1
-        continue-on-error: true
+          echo "App did not start"; docker logs ph-shoes-etl || true; exit 1
 
-      - name: Logs on failure
-        if: steps.wait.outputs.ready != 'true'
+      - name: Generate site files
         run: |
-          echo "==== docker ps -a ===="
-          docker ps -a || true
-          echo "==== container logs (last 500) ===="
-          docker logs --tail=500 ph-shoes-etl || true
-          exit 1
-
-      - name: Download HTML + JSON
-        if: steps.wait.outputs.ready == 'true'
-        run: |
+          mkdir -p public
           TODAY=$(date +'%Y-%m-%d')
-          curl -fsS "http://localhost:8080/reports/etl?timezone=Asia/Manila" -o "etl-report-${TODAY}.html"
-          curl -fsS "http://localhost:8080/api/v1/etl-report?timezone=Asia/Manila" -o "etl-report-${TODAY}.json"
-          ls -lh etl-report-*
+          # HTML becomes the site homepage
+          curl -fsS "http://localhost:8080/reports/etl?timezone=Asia/Manila" -o public/index.html
+          # JSON alongside (handy for programmatic consumers)
+          curl -fsS "http://localhost:8080/api/v1/etl-report?timezone=Asia/Manila" -o public/data.json
+          # Optional: keep a dated copy too
+          mkdir -p public/archive
+          cp public/index.html "public/archive/etl-report-${TODAY}.html"
+          cp public/data.json  "public/archive/etl-report-${TODAY}.json"
+          echo "Generated:"
+          ls -l public public/archive
 
-      - name: Upload artifacts (7 days)
-        if: steps.wait.outputs.ready == 'true'
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Upload zip artifact (optional)
         uses: actions/upload-artifact@v4
         with:
           name: etl-report-${{ github.run_id }}
-          path: |
-            etl-report-*.html
-            etl-report-*.json
-          retention-days: 7
+          path: public/**
+          retention-days: 14
 
-      - name: Stop & remove container
+      - name: Stop container
         if: always()
         run: |
           docker stop ph-shoes-etl || true
           docker rm ph-shoes-etl || true
+
+  deploy:
+    needs: build-and-generate
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
