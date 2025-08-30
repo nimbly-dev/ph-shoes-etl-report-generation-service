@@ -4,15 +4,18 @@ spring:
 
   datasource:
     driver-class-name: net.snowflake.client.jdbc.SnowflakeDriver
+    # Keep URL on ONE line
     url: "jdbc:snowflake://${SNOWFLAKE_ACCOUNT}.snowflakecomputing.com/?warehouse=${SNOWFLAKE_WAREHOUSE:COMPUTE_WH}&db=${SNOWFLAKE_DATABASE}&schema=${SNOWFLAKE_SCHEMA:PUBLIC}&role=${SNOWFLAKE_ROLE}"
+    username: ${SNOWFLAKE_USER}
+    password: ${SNOWFLAKE_PASSWORD}
     hikari:
       maximum-pool-size: 10
       minimum-idle: 1
       idle-timeout: 30000
       connection-timeout: 30000
       data-source-properties:
-        authenticator: oauth
-        token: ${SNOWFLAKE_TOKEN}
+        # keep Arrow off to avoid native deps
+        ENABLE_ARROW_RESULTSET: false
         CLIENT_SESSION_KEEP_ALIVE: true
 
   jpa:
@@ -21,7 +24,7 @@ spring:
       ddl-auto: none
     properties:
       hibernate:
-        dialect: net.snowflake.hibernate.dialect.SnowflakeDialect
+        dialect: org.hibernate.dialect.SnowflakeDialect
 
 management:
   endpoints:
