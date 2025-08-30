@@ -1,37 +1,35 @@
-name: Daily ETL Report
+name: Daily ETL Report (HTML + JSON)
 
 on:
   schedule:
-    # 15:05 UTC ≈ 23:05 Asia/Manila (UTC+8). Adjust as needed.
+    # 15:05 UTC ≈ 23:05 Asia/Manila
     - cron: '5 15 * * *'
   workflow_dispatch:
 
-# Prevent overlapping runs; cancel an in-progress one if a new run starts
 concurrency:
   group: daily-etl-report
   cancel-in-progress: true
 
 jobs:
   run-and-save:
+    environment: main          # <-- MUST MATCH your Environment name
     runs-on: ubuntu-latest
     timeout-minutes: 12
 
-    # Read-only is fine; we only upload artifacts
     permissions:
       contents: read
 
     env:
-      # Secrets/vars configured in GitHub → Settings → Environments (or Repo → Settings → Secrets and variables)
-      SNOWFLAKE_TOKEN: ${{ secrets.SNOWFLAKE_TOKEN }}          # secret
+      SNOWFLAKE_TOKEN: ${{ secrets.SNOWFLAKE_TOKEN }}
       SNOWFLAKE_ACCOUNT: ${{ vars.SNOWFLAKE_ACCOUNT }}
       SNOWFLAKE_DATABASE: ${{ vars.SNOWFLAKE_DATABASE }}
-      SNOWFLAKE_SCHEMA: ${{ vars.SNOWFLAKE_SCHEMA }}           # optional; defaults to PUBLIC in app config
-      SNOWFLAKE_WAREHOUSE: ${{ vars.SNOWFLAKE_WAREHOUSE }}     # optional; defaults to COMPUTE_WH in app config
-      SNOWFLAKE_ROLE: ${{ vars.SNOWFLAKE_ROLE }}               # e.g. SYSADMIN
+      SNOWFLAKE_SCHEMA: ${{ vars.SNOWFLAKE_SCHEMA }}
+      SNOWFLAKE_WAREHOUSE: ${{ vars.SNOWFLAKE_WAREHOUSE }}
+      SNOWFLAKE_ROLE: ${{ vars.SNOWFLAKE_ROLE }}
       TZ: Asia/Manila
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Build Docker image (DockerfileDeploy)
@@ -50,28 +48,36 @@ jobs:
             -e SPRING_PROFILES_ACTIVE=prod \
             ph-shoes-etl:latest
 
-      - name: Wait for app to be ready
+      - name: Wait for app
+        id: wait
         shell: bash
         run: |
           set -e
           for i in {1..30}; do
             if curl -fsS "http://localhost:8080/reports/etl?timezone=Asia/Manila" >/dev/null; then
-              echo "App is up"; exit 0; fi
+              echo "ready=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
             echo "Waiting for app... ($i/30)"; sleep 3
           done
-          echo "App did not start in time" >&2; exit 1
+          echo "ready=false" >> $GITHUB_OUTPUT
+          exit 1
+        continue-on-error: true
 
-      - name: Download HTML + JSON reports
-        shell: bash
+      - name: Show logs if startup failed
+        if: steps.wait.outputs.ready != 'true'
+        run: docker logs ph-shoes-etl || true
+
+      - name: Download HTML + JSON
+        if: steps.wait.outputs.ready == 'true'
         run: |
           TODAY=$(date +'%Y-%m-%d')
-          curl -fsS "http://localhost:8080/reports/etl?timezone=Asia/Manila" \
-            -o "etl-report-${TODAY}.html"
-          curl -fsS "http://localhost:8080/api/v1/etl-report?timezone=Asia/Manila" \
-            -o "etl-report-${TODAY}.json"
+          curl -fsS "http://localhost:8080/reports/etl?timezone=Asia/Manila" -o "etl-report-${TODAY}.html"
+          curl -fsS "http://localhost:8080/api/v1/etl-report?timezone=Asia/Manila" -o "etl-report-${TODAY}.json"
           ls -lh etl-report-*
 
-      - name: Upload artifacts (retain 7 days)
+      - name: Upload artifacts (keep 7 days)
+        if: steps.wait.outputs.ready == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: etl-report-${{ github.run_id }}
