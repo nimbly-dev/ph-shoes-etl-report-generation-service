@@ -2,40 +2,43 @@ name: ETL Report → GitHub Pages
 
 on:
   push:
-    branches: [ main ]         # update page on every push to main
+    branches: [ main ]                # publish on push to main
   schedule:
-    - cron: '5 15 * * *'       # ~23:05 Asia/Manila daily
+    - cron: '5 15 * * *'              # daily ~23:05 Asia/Manila
   workflow_dispatch:
+
+# Required permissions for GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
 
 concurrency:
   group: etl-report-pages
   cancel-in-progress: true
 
-permissions:
-  contents: read
-  id-token: write          # required by deploy-pages
-  pages: write             # required by deploy-pages
-
 jobs:
   build-and-generate:
-    environment: main      # <-- your Environment with Snowflake secrets/vars
+    environment: main                 # <-- your Environment w/ Snowflake secrets & vars
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
     env:
-      # Env from your Environment "main" (Settings → Environments → main)
       SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
       SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
       SNOWFLAKE_ACCOUNT: ${{ vars.SNOWFLAKE_ACCOUNT }}
       SNOWFLAKE_DATABASE: ${{ vars.SNOWFLAKE_DATABASE }}
       SNOWFLAKE_ROLE: ${{ vars.SNOWFLAKE_ROLE }}
-      # optional; let app default to PUBLIC/COMPUTE_WH when not set
       TZ: Asia/Manila
       SPRING_PROFILES_ACTIVE: prod
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # 1) Configure Pages (must run before upload/deploy)
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
 
       - name: Build Docker image (DockerfileDeploy)
         run: docker build -t ph-shoes-etl:latest -f DockerfileDeploy .
@@ -66,25 +69,22 @@ jobs:
 
       - name: Generate site files
         run: |
-          mkdir -p public
-          TODAY=$(date +'%Y-%m-%d')
-          # HTML becomes the site homepage
-          curl -fsS "http://localhost:8080/reports/etl?timezone=Asia/Manila" -o public/index.html
-          # JSON alongside (handy for programmatic consumers)
-          curl -fsS "http://localhost:8080/api/v1/etl-report?timezone=Asia/Manila" -o public/data.json
-          # Optional: keep a dated copy too
           mkdir -p public/archive
+          TODAY=$(date +'%Y-%m-%d')
+          curl -fsS "http://localhost:8080/reports/etl?timezone=Asia/Manila" -o public/index.html
+          curl -fsS "http://localhost:8080/api/v1/etl-report?timezone=Asia/Manila" -o public/data.json
           cp public/index.html "public/archive/etl-report-${TODAY}.html"
           cp public/data.json  "public/archive/etl-report-${TODAY}.json"
-          echo "Generated:"
-          ls -l public public/archive
 
+      # 2) Upload Pages artifact (name defaults to "github-pages")
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: public
+          # artifact_name: github-pages   # (default) leave as-is
 
-      - name: Upload zip artifact (optional)
+      # Optional: also keep a downloadable artifact
+      - name: Upload downloadable artifact (14 days)
         uses: actions/upload-artifact@v4
         with:
           name: etl-report-${{ github.run_id }}
@@ -107,6 +107,7 @@ jobs:
       pages: write
       id-token: write
     steps:
+      # 3) Deploy the artifact named "github-pages"
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
