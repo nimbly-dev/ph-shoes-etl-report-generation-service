@@ -4,50 +4,42 @@
 FROM maven:3.9.8-amazoncorretto-21 AS builder
 WORKDIR /app
 
-# Faster rebuilds: cache deps first
+# Same JVM flags you use in Dev
+ENV JAVA_TOOL_OPTIONS="--add-opens=java.base/java.nio=ALL-UNNAMED -Dsnowflake.jdbc.enableArrow=false"
+
+# Copy POM and (if you need it) install your local dialect jar so Maven can resolve it
 COPY pom.xml ./
-# (Optional) install your local Snowflake Hibernate shim
 COPY libs/snowflake-hibernate.jar libs/
-RUN test -f libs/snowflake-hibernate.jar && \
-    mvn -q install:install-file \
+RUN mvn -q install:install-file \
       -Dfile=libs/snowflake-hibernate.jar \
       -DgroupId=net.snowflake \
       -DartifactId=snowflake-hibernate \
       -Dversion=0.0.2-SNAPSHOT \
       -Dpackaging=jar -DgeneratePom=true || true
-
-# Pre-fetch dependencies (good cache layer)
 RUN mvn -q -B dependency:go-offline
 
-# Now copy sources and build
+# Copy source and build the fat JAR
 COPY src ./src
-# Use parallel builds; skip tests for CI image
 RUN mvn -q -T 1C clean package -DskipTests
 
 ########################################
 # 2) Runtime stage (small, non-root)
 ########################################
 FROM amazoncorretto:21-alpine
-# Create non-root user
-RUN addgroup -S app && adduser -S app -G app
 WORKDIR /app
 
-# Copy the fat jar
-COPY --from=builder /app/target/*-SNAPSHOT.jar /app/app.jar
-
-# Keep JVM flags outside the command so users can override at run time
-ENV JAVA_TOOL_OPTIONS="--add-opens=java.base/java.nio=ALL-UNNAMED -Dsnowflake.jdbc.enableArrow=false"
-# Optional: set default timezone for logs (you can pass TZ env at runtime too)
-ENV TZ=Asia/Manila
-
-# Healthcheck (expects the app to expose /actuator/health)
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=5 \
-  CMD wget -qO- http://127.0.0.1:8080/actuator/health | grep -q '"status":"UP"' || exit 1
-
-EXPOSE 8080
+# non-root user
+RUN addgroup -S app && adduser -S app -G app
 USER app
 
-# Use exec form; profile configurable via SPRING_PROFILES_ACTIVE env
+# copy jar from builder
+COPY --from=builder /app/target/*-SNAPSHOT.jar /app/app.jar
+
+# same JVM flags
+ENV JAVA_TOOL_OPTIONS="--add-opens=java.base/java.nio=ALL-UNNAMED -Dsnowflake.jdbc.enableArrow=false"
+ENV TZ=Asia/Manila
+
+EXPOSE 8080
 ENTRYPOINT ["java","-jar","/app/app.jar"]
-# Default profile (can be overridden at docker run)
+# default profile is prod; overrideable via env
 ENV SPRING_PROFILES_ACTIVE=prod
