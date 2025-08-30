@@ -2,7 +2,7 @@ name: Generate ETL Report
 
 on:
   push:
-    branches: [ main ]
+    branches: [ master ]            # <— use master if that’s your default
   schedule:
     - cron: '5 15 * * *'
   workflow_dispatch:
@@ -21,7 +21,6 @@ jobs:
     environment: main
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
     env:
       SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
       SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
@@ -32,10 +31,10 @@ jobs:
       SPRING_PROFILES_ACTIVE: prod
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
+      - uses: actions/checkout@v4
+
+      # Must run before upload/deploy
+      - uses: actions/configure-pages@v5
 
       - name: Build Docker image (DockerfileDeploy)
         run: docker build -t ph-shoes-etl:latest -f DockerfileDeploy .
@@ -72,18 +71,13 @@ jobs:
           curl -fsS "http://localhost:8080/api/v1/etl-report?timezone=Asia/Manila" -o public/data.json
           cp public/index.html "public/archive/etl-report-${TODAY}.html"
           cp public/data.json  "public/archive/etl-report-${TODAY}.json"
+          # Ensure Jekyll never runs even if repo setting flips
+          touch public/.nojekyll
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: public
-
-      - name: Upload downloadable artifact (14 days)
-        uses: actions/upload-artifact@v4
-        with:
-          name: etl-report-${{ github.run_id }}
-          path: public/**
-          retention-days: 14
 
       - name: Stop container
         if: always()
