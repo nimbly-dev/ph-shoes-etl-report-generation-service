@@ -2,8 +2,7 @@ name: Daily ETL Report (HTML + JSON)
 
 on:
   schedule:
-    # 15:05 UTC ≈ 23:05 Asia/Manila
-    - cron: '5 15 * * *'
+    - cron: '5 15 * * *'   # ~23:05 Asia/Manila
   workflow_dispatch:
 
 concurrency:
@@ -12,10 +11,9 @@ concurrency:
 
 jobs:
   run-and-save:
-    environment: main          # <-- MUST MATCH your Environment name
+    environment: main
     runs-on: ubuntu-latest
-    timeout-minutes: 12
-
+    timeout-minutes: 15
     permissions:
       contents: read
 
@@ -27,17 +25,31 @@ jobs:
       SNOWFLAKE_WAREHOUSE: ${{ vars.SNOWFLAKE_WAREHOUSE }}
       SNOWFLAKE_ROLE: ${{ vars.SNOWFLAKE_ROLE }}
       TZ: Asia/Manila
+      SPRING_PROFILES_ACTIVE: prod
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Debug env presence (redacted)
+        run: |
+          echo "Environment: ${{ job.environment.name }}"
+          echo "SNOWFLAKE_ACCOUNT=${SNOWFLAKE_ACCOUNT}"
+          echo "SNOWFLAKE_DATABASE=${SNOWFLAKE_DATABASE}"
+          echo "SNOWFLAKE_SCHEMA=${SNOWFLAKE_SCHEMA:-<default>}"
+          echo "SNOWFLAKE_WAREHOUSE=${SNOWFLAKE_WAREHOUSE:-<default>}"
+          echo "SNOWFLAKE_ROLE=${SNOWFLAKE_ROLE}"
+          if [ -n "${SNOWFLAKE_TOKEN}" ]; then echo "SNOWFLAKE_TOKEN=present"; else echo "SNOWFLAKE_TOKEN=MISSING"; fi
+
       - name: Build Docker image (DockerfileDeploy)
         run: docker build -t ph-shoes-etl:latest -f DockerfileDeploy .
 
-      - name: Run service container
+      - name: Start container (keep for logs)
+        id: start
+        shell: bash
         run: |
-          docker run -d --rm --name ph-shoes-etl -p 8080:8080 \
+          set -e
+          CID=$(docker run -d --name ph-shoes-etl -p 8080:8080 \
             -e SNOWFLAKE_TOKEN \
             -e SNOWFLAKE_ACCOUNT \
             -e SNOWFLAKE_DATABASE \
@@ -45,15 +57,27 @@ jobs:
             -e SNOWFLAKE_WAREHOUSE \
             -e SNOWFLAKE_ROLE \
             -e TZ \
-            -e SPRING_PROFILES_ACTIVE=prod \
-            ph-shoes-etl:latest
+            -e SPRING_PROFILES_ACTIVE \
+            ph-shoes-etl:latest)
+          echo "cid=$CID" >> $GITHUB_OUTPUT
+          echo "Container ID: $CID"
+          docker ps -a
 
-      - name: Wait for app
+      - name: Quick first logs
+        run: docker logs --tail=200 ph-shoes-etl || true
+
+      - name: Wait for app to be ready
         id: wait
         shell: bash
         run: |
           set -e
           for i in {1..30}; do
+            # If container already exited, stop waiting and fail
+            if ! docker ps --format '{{.Names}}' | grep -q '^ph-shoes-etl$'; then
+              echo "Container exited early."
+              echo "ready=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
             if curl -fsS "http://localhost:8080/reports/etl?timezone=Asia/Manila" >/dev/null; then
               echo "ready=true" >> $GITHUB_OUTPUT
               exit 0
@@ -64,19 +88,27 @@ jobs:
           exit 1
         continue-on-error: true
 
-      - name: Show logs if startup failed
+      - name: Show diagnostics on failure
         if: steps.wait.outputs.ready != 'true'
-        run: docker logs ph-shoes-etl || true
+        run: |
+          echo "==== docker ps -a ===="
+          docker ps -a || true
+          echo "==== container logs (last 500 lines) ===="
+          docker logs --tail=500 ph-shoes-etl || true
+          echo "==== image list ===="
+          docker images || true
+          exit 1
 
       - name: Download HTML + JSON
         if: steps.wait.outputs.ready == 'true'
+        shell: bash
         run: |
           TODAY=$(date +'%Y-%m-%d')
           curl -fsS "http://localhost:8080/reports/etl?timezone=Asia/Manila" -o "etl-report-${TODAY}.html"
           curl -fsS "http://localhost:8080/api/v1/etl-report?timezone=Asia/Manila" -o "etl-report-${TODAY}.json"
           ls -lh etl-report-*
 
-      - name: Upload artifacts (keep 7 days)
+      - name: Upload artifacts (7 days)
         if: steps.wait.outputs.ready == 'true'
         uses: actions/upload-artifact@v4
         with:
@@ -86,6 +118,8 @@ jobs:
             etl-report-*.json
           retention-days: 7
 
-      - name: Stop container
+      - name: Stop & remove container
         if: always()
-        run: docker stop ph-shoes-etl
+        run: |
+          docker stop ph-shoes-etl || true
+          docker rm ph-shoes-etl || true
