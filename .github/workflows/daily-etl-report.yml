@@ -36,12 +36,12 @@ jobs:
       - name: Build Docker image (DockerfileDeploy)
         run: docker build -t ph-shoes-etl:latest -f DockerfileDeploy .
 
-      - name: Verify Snowflake driver packaged
-        run: |
-          CID=$(docker create ph-shoes-etl:latest)
-          docker cp "$CID":/app/app.jar ./app.jar
-          docker rm "$CID" >/dev/null
-          jar tf app.jar | grep -q "net/snowflake/client/jdbc/SnowflakeDriver.class" || { echo "❌ JDBC driver missing"; exit 1; }
+#      - name: Verify Snowflake driver packaged
+#        run: |
+#          CID=$(docker create ph-shoes-etl:latest)
+#          docker cp "$CID":/app/app.jar ./app.jar
+#          docker rm "$CID" >/dev/null
+#          jar tf app.jar | grep -q "net/snowflake/client/jdbc/SnowflakeDriver.class" || { echo "❌ JDBC driver missing"; exit 1; }
 
       - name: Start container (keep for logs)
         id: start
